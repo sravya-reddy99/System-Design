@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server sent events demo</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --accent: #2a6df4; }
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .75rem 0; }
+  input[type=text] { flex: 1; min-width: 12rem; padding: .45rem .6rem; font: inherit; }
+  button { padding: .45rem .8rem; font: inherit; cursor: pointer; }
+  .badge { padding: .1rem .6rem; border-radius: 99px; border: 1px solid var(--line); font-size: .9rem; }
+  .badge[data-state=open] { background: #1a7f3733; }
+  .badge[data-state=reconnecting], .badge[data-state=connecting] { background: #bf870033; }
+  .badge[data-state=closed] { background: #cf222e33; }
+  #clock { opacity: .7; font-variant-numeric: tabular-nums; }
+  ul { list-style: none; padding: 0; margin: 1rem 0; border-top: 1px solid var(--line); }
+  li { padding: .4rem 0; border-bottom: 1px solid var(--line); white-space: pre-wrap; }
+  li small { opacity: .6; margin-right: .5rem; }
+  li.system { opacity: .65; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>Server sent events demo</h1>
+
+<div class="row">
+  <span>Status</span><span id="status" class="badge" data-state="connecting">connecting</span>
+  <span id="clock"></span>
+</div>
+
+<form id="form" class="row">
+  <input id="text" type="text" placeholder="Type a notification" autocomplete="off" required>
+  <button type="submit">Send to everyone</button>
+</form>
+
+<div class="row">
+  <button id="drop" type="button">Drop the connection (it should come back)</button>
+  <button id="disconnect" type="button">Disconnect</button>
+  <button id="connect" type="button">Connect</button>
+</div>
+
+<ul id="log"></ul>
+
+<script>
+  const statusEl = document.getElementById("status");
+  const clockEl = document.getElementById("clock");
+  const logEl = document.getElementById("log");
+  let source = null;
+
+  function setStatus(state) {
+    statusEl.textContent = state;
+    statusEl.dataset.state = state;
+  }
+
+  function addLine(text, label = "", system = false) {
+    const li = document.createElement("li");
+    if (system) li.className = "system";
+    if (label) {
+      const small = document.createElement("small");
+      small.textContent = label;
+      li.append(small);
+    }
+    li.append(document.createTextNode(text)); // textContent style, so no HTML gets injected
+    logEl.prepend(li);
+  }
+
+  function connect() {
+    if (source) source.close();
+    source = new EventSource("/events");
+    setStatus("connecting");
+
+    // The connection is open
+    source.onopen = () => {
+      setStatus("open");
+      addLine("connected", "", true);
+    };
+
+    // Events that have no name arrive here. Our notifications are like that.
+    source.onmessage = (event) => {
+      addLine(event.data, `#${event.lastEventId}`);
+    };
+
+    // Events with a name go to a listener for that name
+    source.addEventListener("tick", (event) => {
+      const { time, connected } = JSON.parse(event.data);
+      clockEl.textContent = `server time ${time.slice(11, 19)} | ${connected} connected`;
+    });
+
+    // The connection broke. The browser retries by itself, unless we closed it.
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) {
+        setStatus("closed");
+      } else {
+        setStatus("reconnecting");
+        addLine("connection lost, the browser will retry", "", true);
+      }
+    };
+  }
+
+  document.getElementById("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("text");
+    await fetch("/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: input.value }),
+    });
+    input.value = "";
+  });
+
+  document.getElementById("drop").addEventListener("click", () => fetch("/drop", { method: "POST" }));
+
+  document.getElementById("disconnect").addEventListener("click", () => {
+    source.close(); // close() stops the automatic retry
+    setStatus("closed");
+    addLine("disconnected by you", "", true);
+  });
+
+  document.getElementById("connect").addEventListener("click", connect);
+
+  connect();
+</script>
+</body>
+</html>
